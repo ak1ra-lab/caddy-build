@@ -18,4 +18,12 @@ Manual build:
 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o caddy .
 ```
 
-Automated build via [GitHub Actions](.github/workflows/build.yaml) (manual trigger, `linux/amd64` + `linux/arm64`). Artifacts are uploaded to GitHub Releases with filenames like `caddy_v2.11.4_linux_amd64.tar.gz`.
+Automated build via [GitHub Actions](.github/workflows/build.yaml) (manual trigger, `linux/amd64` + `linux/arm64`). Artifacts are uploaded to GitHub Releases with filenames like `caddy_v2.11.4_linux_amd64.gz`.
+
+## Usage
+
+Caddy may need to bind to privileged ports (<1024). On Linux, grant the capability after downloading:
+
+```sh
+sudo setcap cap_net_bind_service=+ep ./caddy
+```
