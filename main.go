@@ -34,6 +34,10 @@ import (
 	caddycmd "github.com/caddyserver/caddy/v2/cmd"
 
 	// plug in Caddy modules here
+	_ "github.com/caddy-dns/acmedns"
+	_ "github.com/caddy-dns/alidns"
+	_ "github.com/caddy-dns/cloudflare"
+	_ "github.com/caddy-dns/tencentcloud"
 	_ "github.com/caddyserver/caddy/v2/modules/standard"
 )
 
