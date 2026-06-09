@@ -18,7 +18,7 @@ jobs:
 
       - name: Update modules
         run: |
-          go get -u ./...
+          go get -u $(go list -m -f '{{if not .Indirect}}{{.Path}}{{end}}' all)
           go mod tidy
 
       - name: Commit and push updates
@@ -27,7 +27,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           if ! git diff --exit-code go.mod go.sum; then
             git add go.mod go.sum
-            git commit -m "chore: update caddy to latest"
+            git commit -m "chore: update dependencies"
             git push
           fi
 
@@ -35,9 +35,7 @@ jobs:
         id: version
         run: |
           CADDY_VER=$(grep -oP 'github\.com/caddyserver/caddy/v2\s+\K\S+' go.mod)
-          BUILD_DATE=$(date +%Y%m%d)
           echo "caddy=${CADDY_VER}" >> "$GITHUB_OUTPUT"
-          echo "date=${BUILD_DATE}" >> "$GITHUB_OUTPUT"
 
       - name: Build
         run: |
@@ -49,7 +47,6 @@ jobs:
       - name: Package
         run: |
           CADDY_VER="${{ steps.version.outputs.caddy }}"
-          BUILD_DATE="${{ steps.version.outputs.date }}"
           for arch in amd64 arm64; do
             BIN="caddy_${CADDY_VER}_linux_${arch}"
             mv "caddy-${arch}" "${BIN}"
@@ -58,8 +55,7 @@ jobs:
 
       - uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ steps.version.outputs.caddy }}-${{ steps.version.outputs.date }}
-          prerelease: true
+          tag_name: ${{ steps.version.outputs.caddy }}
           files: "*.gz"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
