@@ -1,0 +1,50 @@
+---
+name: Build and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag"
+        required: false
+        default: "nightly"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+
+      - name: Extract version
+        id: version
+        run: |
+          CADDY_VER=$(grep -oP 'github\.com/caddyserver/caddy/v2\s+\K\S+' go.mod)
+          echo "caddy=${CADDY_VER}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: |
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=${arch} \
+              go build -trimpath -ldflags="-s -w" -o "caddy-${arch}" .
+          done
+
+      - name: Package
+        run: |
+          CADDY_VER="${{ steps.version.outputs.caddy }}"
+          for arch in amd64 arm64; do
+            BIN="caddy_${CADDY_VER}_linux_${arch}"
+            mv "caddy-${arch}" "${BIN}"
+            gzip -k "${BIN}"
+          done
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ inputs.tag }}
+          prerelease: true
+          files: "*.gz"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
