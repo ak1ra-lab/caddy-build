@@ -18,4 +18,4 @@ Manual build:
 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o caddy .
 ```
 
-Automated build via [GitHub Actions](.github/workflows/build.yml) (manual trigger, `linux/amd64` + `linux/arm64`). Artifacts are uploaded to GitHub Releases with filenames like `caddy_v2.11.4_<sha>_linux_amd64.tar.gz`.
+Automated build via [GitHub Actions](.github/workflows/build.yaml) (manual trigger, `linux/amd64` + `linux/arm64`). Artifacts are uploaded to GitHub Releases with filenames like `caddy_v2.11.4_linux_amd64.tar.gz`.
