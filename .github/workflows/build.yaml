@@ -2,60 +2,140 @@ name: Build and Release
 
 on:
   workflow_dispatch:
+    inputs:
+      force:
+        description: "Build and release even when no upstream updates are detected"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "30 3 * * 1"
+
+concurrency:
+  group: build-and-release
+  cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build:
+  check:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      changed: ${{ steps.upstream.outputs.changed }}
     steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version: "1.25"
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Detect upstream updates
+        id: upstream
+        shell: bash
+        run: |
+          updates=$(go list -m -u -f '{{if and (not .Main) (not .Indirect) .Update}}{{.Path}} {{.Version}} -> {{.Update.Version}}{{end}}' all | awk 'NF')
+          caddy_version=$(go list -m -f '{{.Version}}' github.com/caddyserver/caddy/v2)
+          tags=$(git ls-remote --tags origin)
+          if [ -n "${updates}" ]; then
+            echo "updates:"
+            echo "${updates}"
+          fi
+          if [ -n "${updates}" ] || ! printf '%s\n' "${tags}" | grep -q "refs/tags/${caddy_version}$"; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.changed == 'true' || (github.event_name == 'workflow_dispatch' && inputs.force)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
 
       - name: Update modules
         run: |
-          go get -u $(go list -m -f '{{if not .Indirect}}{{.Path}}{{end}}' all)
+          mapfile -t modules < <(go list -m -f '{{if and (not .Main) (not .Indirect)}}{{.Path}}{{end}}' all | awk 'NF')
+          if [ "${#modules[@]}" -eq 0 ]; then
+            echo "no direct modules found in go.mod" >&2
+            exit 1
+          fi
+          for module in "${modules[@]}"; do
+            go get "${module}@latest"
+          done
           go mod tidy
 
       - name: Commit and push updates
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           if ! git diff --exit-code go.mod go.sum; then
             git add go.mod go.sum
             git commit -m "chore: update dependencies"
-            git push
+            git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${GITHUB_REF_NAME}"
           fi
 
       - name: Extract version
         id: version
         run: |
-          CADDY_VER=$(grep -oP 'github\.com/caddyserver/caddy/v2\s+\K\S+' go.mod)
-          echo "caddy=${CADDY_VER}" >> "$GITHUB_OUTPUT"
+          caddy_version=$(go list -m -f '{{.Version}}' github.com/caddyserver/caddy/v2)
+          echo "caddy=${caddy_version}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes
+        run: |
+          {
+            echo "## Included modules"
+            echo
+            echo "| Module | Version |"
+            echo "| --- | --- |"
+            go list -m -f '{{if and (not .Main) (not .Indirect)}}| [{{.Path}}](https://{{.Path}}) | {{.Version}} |{{end}}' all | awk 'NF'
+          } > release-notes.md
 
       - name: Build
         run: |
           for arch in amd64 arm64; do
-            CGO_ENABLED=0 GOOS=linux GOARCH=${arch} \
+            CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" \
               go build -trimpath -ldflags="-s -w" -o "caddy-${arch}" .
           done
 
       - name: Package
+        env:
+          CADDY_VERSION: ${{ steps.version.outputs.caddy }}
         run: |
-          CADDY_VER="${{ steps.version.outputs.caddy }}"
           for arch in amd64 arm64; do
-            BIN="caddy_${CADDY_VER}_linux_${arch}"
-            mv "caddy-${arch}" "${BIN}"
-            gzip -k "${BIN}"
+            bin="caddy_${CADDY_VERSION}_linux_${arch}"
+            mv "caddy-${arch}" "${bin}"
+            gzip -k "${bin}"
           done
 
-      - uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ steps.version.outputs.caddy }}
-          files: "*.gz"
+      - name: Publish release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          CADDY_VERSION: ${{ steps.version.outputs.caddy }}
+        run: |
+          if gh release view "${CADDY_VERSION}" >/dev/null 2>&1; then
+            gh release edit "${CADDY_VERSION}" --notes-file release-notes.md
+            gh release upload "${CADDY_VERSION}" ./*.gz --clobber
+          else
+            gh release create "${CADDY_VERSION}" ./*.gz \
+              --target "$(git rev-parse HEAD)" \
+              --generate-notes \
+              --notes-file release-notes.md \
+              --title "${CADDY_VERSION}"
+          fi
