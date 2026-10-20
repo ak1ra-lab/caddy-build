@@ -3,6 +3,10 @@ name: Build and Release
 on:
   workflow_dispatch:
     inputs:
+      caddy_tag:
+        description: "Upstream Caddy tag to build (e.g. v2.11.7); leave empty to update to latest"
+        type: string
+        required: false
       force:
         description: "Build and release even when no upstream updates are detected"
         type: boolean
@@ -30,7 +34,9 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          # Track the latest stable Go so dependencies that raise go.mod's go
+          # directive can still be resolved. go get updates that directive.
+          go-version: stable
           cache: false
 
       - name: Detect upstream updates
@@ -52,7 +58,9 @@ jobs:
 
   build:
     needs: check
-    if: needs.check.outputs.changed == 'true' || (github.event_name == 'workflow_dispatch' && inputs.force)
+    if: >-
+      needs.check.outputs.changed == 'true' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.force || inputs.caddy_tag != ''))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -64,20 +72,37 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version: stable
           cache: false
 
       - name: Update modules
+        env:
+          CADDY_TAG: ${{ inputs.caddy_tag }}
         run: |
-          mapfile -t modules < <(go list -m -f '{{if and (not .Main) (not .Indirect)}}{{.Path}}{{end}}' all | awk 'NF')
-          if [ "${#modules[@]}" -eq 0 ]; then
-            echo "no direct modules found in go.mod" >&2
-            exit 1
+          if [ -n "${CADDY_TAG}" ]; then
+            if [[ ! "${CADDY_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "invalid Caddy tag: ${CADDY_TAG}" >&2
+              exit 1
+            fi
+            go get "github.com/caddyserver/caddy/v2@${CADDY_TAG}"
+            go mod tidy
+            resolved=$(go list -m -f '{{.Version}}' github.com/caddyserver/caddy/v2)
+            if [ "${resolved}" != "${CADDY_TAG}" ]; then
+              echo "requested Caddy ${CADDY_TAG}, but dependency resolution selected ${resolved}" >&2
+              echo "adjust the module versions in go.mod, or request ${resolved} instead" >&2
+              exit 1
+            fi
+          else
+            mapfile -t modules < <(go list -m -f '{{if and (not .Main) (not .Indirect)}}{{.Path}}{{end}}' all | awk 'NF')
+            if [ "${#modules[@]}" -eq 0 ]; then
+              echo "no direct modules found in go.mod" >&2
+              exit 1
+            fi
+            for module in "${modules[@]}"; do
+              go get "${module}@latest"
+            done
+            go mod tidy
           fi
-          for module in "${modules[@]}"; do
-            go get "${module}@latest"
-          done
-          go mod tidy
 
       - name: Commit and push updates
         env:

@@ -20,6 +20,8 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o caddy .
 
 Automated build via [GitHub Actions](.github/workflows/build.yaml) (weekly scheduled check for upstream Caddy and DNS module updates, plus manual trigger, `linux/amd64` + `linux/arm64`). Detected updates are committed and built; releases are tagged with the Caddy version, and artifacts are uploaded to GitHub Releases with filenames like `caddy_v2.11.4_linux_amd64.gz`.
 
+Manual runs accept an optional `caddy_tag` input (for example `v2.11.7`) to build a specific upstream Caddy release. When it is set, Caddy is pinned to that tag; the DNS modules are not proactively updated, though `go get` may downgrade them if a newer version requires a newer Caddy. Leave it empty to update every direct module to the latest version. The workflow uses the latest stable Go toolchain, and `go get` raises the `go` directive in `go.mod` automatically when a dependency requires a newer Go release.
+
 ## Usage
 
 Caddy may need to bind to privileged ports (<1024). On Linux, grant the capability after downloading:
